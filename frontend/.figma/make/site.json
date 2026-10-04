@@ -1,0 +1,10 @@
+{
+  "description": "Interactive journey guiding users through cyber attack scenarios to identify phishing attempts and enhance cybersecurity awareness.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
