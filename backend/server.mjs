@@ -4,8 +4,10 @@ const PORT = Number.parseInt(process.env.PORT ?? "8787", 10);
 const GEMINI_MODEL = process.env.GEMINI_MODEL ?? "gemini-3.5-flash-lite";
 const MAX_BODY_BYTES = 16 * 1024;
 const REQUEST_TIMEOUT_MS = 10_000;
+const ELEVENLABS_TIMEOUT_MS = 15_000;
 const MAX_GEMINI_ATTEMPTS = 1;
 const MAX_CONTENT_ATTEMPTS = 1;
+const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID ?? "21m00Tcm4TlvDq8ikWAM";
 
 const allowedKinds = new Set(["email", "message", "call"]);
 const allowedTopics = [
@@ -346,6 +348,70 @@ const server = createServer(async (request, response) => {
 
   if (request.method === "GET" && requestUrl.pathname === "/health") {
     sendJson(response, 200, { status: "ok" }, cors);
+    return;
+  }
+
+  if (request.method === "POST" && requestUrl.pathname === "/text-to-speech") {
+    const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
+    if (!elevenLabsApiKey) {
+      console.error("ELEVENLABS_API_KEY is not configured");
+      sendJson(response, 503, { error: "Voice generation is not configured" }, cors);
+      return;
+    }
+
+    try {
+      const body = await readJsonBody(request);
+      if (!isShortString(body?.text, 700)) {
+        sendJson(response, 400, { error: "Invalid text-to-speech request" }, cors);
+        return;
+      }
+
+      const elevenLabsResponse = await fetch(
+        `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(ELEVENLABS_VOICE_ID)}?output_format=mp3_44100_128`,
+        {
+          method: "POST",
+          headers: {
+            Accept: "audio/mpeg",
+            "Content-Type": "application/json",
+            "xi-api-key": elevenLabsApiKey,
+          },
+          body: JSON.stringify({
+            text: body.text.trim(),
+            model_id: "eleven_flash_v2_5",
+            voice_settings: {
+              stability: 0.58,
+              similarity_boost: 0.78,
+              style: 0.22,
+              use_speaker_boost: true,
+            },
+          }),
+          signal: AbortSignal.timeout(ELEVENLABS_TIMEOUT_MS),
+        },
+      );
+
+      if (!elevenLabsResponse.ok) {
+        const details = await elevenLabsResponse.text();
+        console.error("ElevenLabs API error", elevenLabsResponse.status, details.slice(0, 500));
+        sendJson(response, 502, { error: "Unable to generate voice audio" }, cors);
+        return;
+      }
+
+      const audio = Buffer.from(await elevenLabsResponse.arrayBuffer());
+      response.writeHead(200, {
+        ...cors,
+        "Content-Type": "audio/mpeg",
+        "Content-Length": audio.length,
+        "Cache-Control": "no-store",
+      });
+      response.end(audio);
+    } catch (error) {
+      if (error?.name === "TimeoutError" || error?.name === "AbortError") {
+        sendJson(response, 503, { error: "Voice generation timed out" }, cors);
+        return;
+      }
+      console.error("Voice generation failed", error);
+      sendJson(response, 500, { error: "Unable to generate voice audio" }, cors);
+    }
     return;
   }
 
