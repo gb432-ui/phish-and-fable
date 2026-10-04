@@ -145,7 +145,7 @@ Return only valid JSON with this exact shape:
     { "id": "safe", "label": "Safe passage" },
     { "id": "phishing", "label": "Phishing trap" }
   ],
-  "correctAnswer": "phishing",
+  "correctAnswer": "Choose exactly one of the two choice IDs: safe or phishing.",
   "explanation": "A short plain-language explanation of the clue.",
   "consequence": "One short story sentence describing what happens after the choice."
 }
@@ -154,6 +154,11 @@ Requirements:
 - Make the answer clear from beginner-level clues.
 - Do not require prior cybersecurity knowledge.
 - Use only the two specified choices.
+- Randomly choose either "safe" or "phishing" as correctAnswer before writing the scenario.
+- Aim for an approximately 50/50 mix of safe and phishing answers across repeated challenges.
+- Make every clue in the sender, subject, message, explanation, and consequence match the selected correctAnswer.
+- Do not default to phishing; safe communications should appear just as often as phishing traps.
+- Keep the choices exactly "safe" → "Safe passage" and "phishing" → "Phishing trap".
 - Set correctAnswer to exactly "safe" or exactly "phishing". Never write "safe or phishing".
 - Mix legitimate and dangerous communications across repeated requests.
 - Never include a real company, real phone number, real active URL, personal data, or instructions that enable cyber abuse.
