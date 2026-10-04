@@ -59,6 +59,10 @@ function isShortString(value, maxLength) {
   return typeof value === "string" && value.trim().length > 0 && value.length <= maxLength;
 }
 
+function isGeneratedString(value) {
+  return typeof value === "string" && value.trim().length > 0 && value.length <= 2_000;
+}
+
 function isValidRequest(value) {
   if (!value || typeof value !== "object") return false;
   const kind = String(value.kind ?? "");
@@ -77,13 +81,13 @@ function isGeminiChallenge(value) {
   if (!value || typeof value !== "object") return false;
 
   if (
-    !isShortString(value.scenario, 360) ||
-    !isShortString(value.question, 100) ||
-    !isShortString(value.sender, 100) ||
-    !isShortString(value.subject, 120) ||
-    !isShortString(value.message, 420) ||
-    !isShortString(value.explanation, 300) ||
-    !isShortString(value.consequence, 220) ||
+    !isGeneratedString(value.scenario) ||
+    !isGeneratedString(value.question) ||
+    !isGeneratedString(value.sender) ||
+    !isGeneratedString(value.subject) ||
+    !isGeneratedString(value.message) ||
+    !isGeneratedString(value.explanation) ||
+    !isGeneratedString(value.consequence) ||
     !["safe", "phishing"].includes(String(value.correctAnswer))
   ) {
     return false;
@@ -155,7 +159,7 @@ Requirements:
 - Keep every field concise enough for a small game card.`;
 }
 
-async function generateChallenge(input, apiKey) {
+async function generateChallenge(input, apiKey, contentAttempt = 1) {
   let geminiResponse;
 
   for (let attempt = 1; attempt <= MAX_GEMINI_ATTEMPTS; attempt += 1) {
@@ -238,6 +242,9 @@ async function generateChallenge(input, apiKey) {
   const payload = await geminiResponse.json();
   const responseText = payload?.candidates?.[0]?.content?.parts?.[0]?.text;
   if (typeof responseText !== "string") {
+    if (contentAttempt < 2) {
+      return generateChallenge(input, apiKey, contentAttempt + 1);
+    }
     const error = new Error("Gemini returned an empty challenge");
     error.status = 502;
     throw error;
@@ -251,12 +258,18 @@ async function generateChallenge(input, apiKey) {
       .replace(/\s*```$/, "");
     challenge = JSON.parse(jsonText);
   } catch {
+    if (contentAttempt < 2) {
+      return generateChallenge(input, apiKey, contentAttempt + 1);
+    }
     const error = new Error("Gemini returned malformed challenge data");
     error.status = 502;
     throw error;
   }
 
   if (!isGeminiChallenge(challenge)) {
+    if (contentAttempt < 2) {
+      return generateChallenge(input, apiKey, contentAttempt + 1);
+    }
     const error = new Error("Gemini returned invalid challenge data");
     error.status = 502;
     throw error;
@@ -265,13 +278,13 @@ async function generateChallenge(input, apiKey) {
   return {
     kind: input.kind,
     location: input.location.trim(),
-    title: challenge.question.trim(),
-    sender: challenge.sender.trim(),
-    subject: challenge.subject.trim(),
-    message: challenge.message.trim(),
+    title: challenge.question.trim().slice(0, 100),
+    sender: challenge.sender.trim().slice(0, 100),
+    subject: challenge.subject.trim().slice(0, 120),
+    message: challenge.message.trim().slice(0, 420),
     phishing: challenge.correctAnswer === "phishing",
-    lesson: `${challenge.explanation.trim()} ${challenge.consequence.trim()}`,
-    story: challenge.scenario.trim(),
+    lesson: `${challenge.explanation.trim().slice(0, 300)} ${challenge.consequence.trim().slice(0, 220)}`,
+    story: challenge.scenario.trim().slice(0, 360),
   };
 }
 
