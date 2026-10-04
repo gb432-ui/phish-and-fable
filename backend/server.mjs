@@ -3,8 +3,9 @@ import { createServer } from "node:http";
 const PORT = Number.parseInt(process.env.PORT ?? "8787", 10);
 const GEMINI_MODEL = process.env.GEMINI_MODEL ?? "gemini-3.8-flash";
 const MAX_BODY_BYTES = 16 * 1024;
-const REQUEST_TIMEOUT_MS = 60_000;
-const MAX_GEMINI_ATTEMPTS = 3;
+const REQUEST_TIMEOUT_MS = 10_000;
+const MAX_GEMINI_ATTEMPTS = 1;
+const MAX_CONTENT_ATTEMPTS = 1;
 
 const allowedKinds = new Set(["email", "message", "call"]);
 const allowedTopics = [
@@ -163,65 +164,74 @@ async function generateChallenge(input, apiKey, contentAttempt = 1) {
   let geminiResponse;
 
   for (let attempt = 1; attempt <= MAX_GEMINI_ATTEMPTS; attempt += 1) {
-    geminiResponse = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": apiKey,
-        },
-        body: JSON.stringify({
-          contents: [{ role: "user", parts: [{ text: createPrompt(input) }] }],
-          generationConfig: {
-            temperature: 0.7,
-            maxOutputTokens: 900,
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: "OBJECT",
-              required: [
-                "scenario",
-                "question",
-                "sender",
-                "subject",
-                "message",
-                "choices",
-                "correctAnswer",
-                "explanation",
-                "consequence",
-              ],
-              properties: {
-                scenario: { type: "STRING" },
-                question: { type: "STRING" },
-                sender: { type: "STRING" },
-                subject: { type: "STRING" },
-                message: { type: "STRING" },
-                choices: {
-                  type: "ARRAY",
-                  minItems: 2,
-                  maxItems: 2,
-                  items: {
-                    type: "OBJECT",
-                    required: ["id", "label"],
-                    properties: {
-                      id: { type: "STRING", enum: ["safe", "phishing"] },
-                      label: { type: "STRING" },
+    try {
+      geminiResponse = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": apiKey,
+          },
+          body: JSON.stringify({
+            contents: [{ role: "user", parts: [{ text: createPrompt(input) }] }],
+            generationConfig: {
+              temperature: 0.7,
+              maxOutputTokens: 900,
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: "OBJECT",
+                required: [
+                  "scenario",
+                  "question",
+                  "sender",
+                  "subject",
+                  "message",
+                  "choices",
+                  "correctAnswer",
+                  "explanation",
+                  "consequence",
+                ],
+                properties: {
+                  scenario: { type: "STRING" },
+                  question: { type: "STRING" },
+                  sender: { type: "STRING" },
+                  subject: { type: "STRING" },
+                  message: { type: "STRING" },
+                  choices: {
+                    type: "ARRAY",
+                    minItems: 2,
+                    maxItems: 2,
+                    items: {
+                      type: "OBJECT",
+                      required: ["id", "label"],
+                      properties: {
+                        id: { type: "STRING", enum: ["safe", "phishing"] },
+                        label: { type: "STRING" },
+                      },
                     },
                   },
+                  correctAnswer: {
+                    type: "STRING",
+                    enum: ["safe", "phishing"],
+                  },
+                  explanation: { type: "STRING" },
+                  consequence: { type: "STRING" },
                 },
-                correctAnswer: {
-                  type: "STRING",
-                  enum: ["safe", "phishing"],
-                },
-                explanation: { type: "STRING" },
-                consequence: { type: "STRING" },
               },
             },
-          },
-        }),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      },
-    );
+          }),
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        },
+      );
+    } catch (error) {
+      if (error?.name === "TimeoutError" || error?.name === "AbortError") {
+        const timeoutError = new Error("Gemini request timed out");
+        timeoutError.status = 503;
+        throw timeoutError;
+      }
+      throw error;
+    }
 
     const retryable = [429, 500, 503, 504].includes(geminiResponse.status);
     if (geminiResponse.ok || !retryable || attempt === MAX_GEMINI_ATTEMPTS) break;
@@ -235,14 +245,14 @@ async function generateChallenge(input, apiKey, contentAttempt = 1) {
     const details = await geminiResponse.text();
     console.error("Gemini API error", geminiResponse.status, details.slice(0, 500));
     const error = new Error("Unable to generate a challenge");
-    error.status = 502;
+    error.status = [429, 503, 504].includes(geminiResponse.status) ? 503 : 502;
     throw error;
   }
 
   const payload = await geminiResponse.json();
   const responseText = payload?.candidates?.[0]?.content?.parts?.[0]?.text;
   if (typeof responseText !== "string") {
-    if (contentAttempt < 2) {
+    if (contentAttempt < MAX_CONTENT_ATTEMPTS) {
       return generateChallenge(input, apiKey, contentAttempt + 1);
     }
     const error = new Error("Gemini returned an empty challenge");
@@ -258,7 +268,7 @@ async function generateChallenge(input, apiKey, contentAttempt = 1) {
       .replace(/\s*```$/, "");
     challenge = JSON.parse(jsonText);
   } catch {
-    if (contentAttempt < 2) {
+    if (contentAttempt < MAX_CONTENT_ATTEMPTS) {
       return generateChallenge(input, apiKey, contentAttempt + 1);
     }
     const error = new Error("Gemini returned malformed challenge data");
@@ -267,7 +277,7 @@ async function generateChallenge(input, apiKey, contentAttempt = 1) {
   }
 
   if (!isGeminiChallenge(challenge)) {
-    if (contentAttempt < 2) {
+    if (contentAttempt < MAX_CONTENT_ATTEMPTS) {
       return generateChallenge(input, apiKey, contentAttempt + 1);
     }
     const error = new Error("Gemini returned invalid challenge data");
