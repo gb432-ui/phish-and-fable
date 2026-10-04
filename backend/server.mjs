@@ -21,6 +21,34 @@ const allowedTopics = [
   "voice phishing",
 ];
 
+let answerTargets = [];
+
+function createAnswerCycle() {
+  const safeCount = Math.random() < 0.5 ? 2 : 3;
+  const cycle = [
+    ...Array.from({ length: safeCount }, () => "safe"),
+    ...Array.from({ length: 5 - safeCount }, () => "phishing"),
+  ];
+
+  for (let index = cycle.length - 1; index > 0; index -= 1) {
+    const randomIndex = Math.floor(Math.random() * (index + 1));
+    [cycle[index], cycle[randomIndex]] = [cycle[randomIndex], cycle[index]];
+  }
+
+  return cycle;
+}
+
+function reserveAnswerTarget() {
+  if (answerTargets.length === 0) {
+    answerTargets = createAnswerCycle();
+  }
+  return answerTargets.shift();
+}
+
+function restoreAnswerTarget(targetAnswer) {
+  answerTargets.unshift(targetAnswer);
+}
+
 const configuredOrigins = (process.env.ALLOWED_ORIGINS ?? "*")
   .split(",")
   .map((origin) => origin.trim())
@@ -129,10 +157,11 @@ async function readJsonBody(request) {
   }
 }
 
-function createPrompt({ kind, location, topic }) {
+function createPrompt({ kind, location, topic }, targetAnswer) {
   return `Create ONE easy, beginner-friendly cybersecurity challenge for a two-choice educational game.
 
 The game is an enchanted forest journey. This chapter is called "${location}" and the challenge appears as a ${kind}. The lesson topic is ${topic}.
+The required correct answer for this challenge is "${targetAnswer}".
 
 Return only valid JSON with this exact shape:
 {
@@ -145,7 +174,7 @@ Return only valid JSON with this exact shape:
     { "id": "safe", "label": "Safe passage" },
     { "id": "phishing", "label": "Phishing trap" }
   ],
-  "correctAnswer": "Choose exactly one of the two choice IDs: safe or phishing.",
+  "correctAnswer": "${targetAnswer}",
   "explanation": "A short plain-language explanation of the clue.",
   "consequence": "One short story sentence describing what happens after the choice."
 }
@@ -154,10 +183,8 @@ Requirements:
 - Make the answer clear from beginner-level clues.
 - Do not require prior cybersecurity knowledge.
 - Use only the two specified choices.
-- Randomly choose either "safe" or "phishing" as correctAnswer before writing the scenario.
-- Aim for an approximately 50/50 mix of safe and phishing answers across repeated challenges.
-- Make every clue in the sender, subject, message, explanation, and consequence match the selected correctAnswer.
-- Do not default to phishing; safe communications should appear just as often as phishing traps.
+- Set correctAnswer to exactly "${targetAnswer}".
+- Make every clue in the sender, subject, message, explanation, and consequence clearly support "${targetAnswer}" as the correct choice.
 - Keep the choices exactly "safe" → "Safe passage" and "phishing" → "Phishing trap".
 - Set correctAnswer to exactly "safe" or exactly "phishing". Never write "safe or phishing".
 - Mix legitimate and dangerous communications across repeated requests.
@@ -165,7 +192,7 @@ Requirements:
 - Keep every field concise enough for a small game card.`;
 }
 
-async function generateChallenge(input, apiKey, contentAttempt = 1) {
+async function generateChallenge(input, apiKey, targetAnswer, contentAttempt = 1) {
   let geminiResponse;
 
   for (let attempt = 1; attempt <= MAX_GEMINI_ATTEMPTS; attempt += 1) {
@@ -179,7 +206,7 @@ async function generateChallenge(input, apiKey, contentAttempt = 1) {
             "x-goog-api-key": apiKey,
           },
           body: JSON.stringify({
-            contents: [{ role: "user", parts: [{ text: createPrompt(input) }] }],
+            contents: [{ role: "user", parts: [{ text: createPrompt(input, targetAnswer) }] }],
             generationConfig: {
               maxOutputTokens: 900,
               responseMimeType: "application/json",
@@ -217,7 +244,7 @@ async function generateChallenge(input, apiKey, contentAttempt = 1) {
                   },
                   correctAnswer: {
                     type: "STRING",
-                    enum: ["safe", "phishing"],
+                    enum: [targetAnswer],
                   },
                   explanation: { type: "STRING" },
                   consequence: { type: "STRING" },
@@ -257,7 +284,7 @@ async function generateChallenge(input, apiKey, contentAttempt = 1) {
   const responseText = payload?.candidates?.[0]?.content?.parts?.[0]?.text;
   if (typeof responseText !== "string") {
     if (contentAttempt < MAX_CONTENT_ATTEMPTS) {
-      return generateChallenge(input, apiKey, contentAttempt + 1);
+      return generateChallenge(input, apiKey, targetAnswer, contentAttempt + 1);
     }
     const error = new Error("Gemini returned an empty challenge");
     error.status = 502;
@@ -273,16 +300,16 @@ async function generateChallenge(input, apiKey, contentAttempt = 1) {
     challenge = JSON.parse(jsonText);
   } catch {
     if (contentAttempt < MAX_CONTENT_ATTEMPTS) {
-      return generateChallenge(input, apiKey, contentAttempt + 1);
+      return generateChallenge(input, apiKey, targetAnswer, contentAttempt + 1);
     }
     const error = new Error("Gemini returned malformed challenge data");
     error.status = 502;
     throw error;
   }
 
-  if (!isGeminiChallenge(challenge)) {
+  if (!isGeminiChallenge(challenge) || challenge.correctAnswer !== targetAnswer) {
     if (contentAttempt < MAX_CONTENT_ATTEMPTS) {
-      return generateChallenge(input, apiKey, contentAttempt + 1);
+      return generateChallenge(input, apiKey, targetAnswer, contentAttempt + 1);
     }
     const error = new Error("Gemini returned invalid challenge data");
     error.status = 502;
@@ -341,8 +368,14 @@ const server = createServer(async (request, response) => {
       return;
     }
 
-    const challenge = await generateChallenge(input, apiKey);
-    sendJson(response, 200, challenge, cors);
+    const targetAnswer = reserveAnswerTarget();
+    try {
+      const challenge = await generateChallenge(input, apiKey, targetAnswer);
+      sendJson(response, 200, challenge, cors);
+    } catch (error) {
+      restoreAnswerTarget(targetAnswer);
+      throw error;
+    }
   } catch (error) {
     const status = Number.isInteger(error?.status) ? error.status : 500;
     if (status === 500) console.error("Challenge generation failed", error);
