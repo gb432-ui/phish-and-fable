@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 const PORT = Number.parseInt(process.env.PORT ?? "8787", 10);
 const GEMINI_MODEL = process.env.GEMINI_MODEL ?? "gemini-3.8-flash";
 const MAX_BODY_BYTES = 16 * 1024;
-const REQUEST_TIMEOUT_MS = 30_000;
+const REQUEST_TIMEOUT_MS = 60_000;
 const MAX_GEMINI_ATTEMPTS = 3;
 
 const allowedKinds = new Set(["email", "message", "call"]);
