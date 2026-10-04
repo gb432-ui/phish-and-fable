@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 
 const PORT = Number.parseInt(process.env.PORT ?? "8787", 10);
-const GEMINI_MODEL = process.env.GEMINI_MODEL ?? "gemini-3.8-flash";
+const GEMINI_MODEL = process.env.GEMINI_MODEL ?? "gemini-3.5-flash-lite";
 const MAX_BODY_BYTES = 16 * 1024;
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_GEMINI_ATTEMPTS = 1;
@@ -176,7 +176,6 @@ async function generateChallenge(input, apiKey, contentAttempt = 1) {
           body: JSON.stringify({
             contents: [{ role: "user", parts: [{ text: createPrompt(input) }] }],
             generationConfig: {
-              temperature: 0.7,
               maxOutputTokens: 900,
               responseMimeType: "application/json",
               responseSchema: {
